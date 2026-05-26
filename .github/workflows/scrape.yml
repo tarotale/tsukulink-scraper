@@ -10,7 +10,7 @@ jobs:
     strategy:
       matrix:
         include:
-          # 大阪府の担当区域を分割してセット
+          # 大阪府の担当区域を5分割（計250ページ分）に拡張
           - prefecture: "大阪府"
             start_page: 1
             end_page: 50
@@ -20,9 +20,15 @@ jobs:
           - prefecture: "大阪府"
             start_page: 101
             end_page: 150
+          - prefecture: "大阪府"
+            start_page: 151
+            end_page: 200
+          - prefecture: "大阪府"
+            start_page: 201
+            end_page: 250
             
       fail-fast: false
-      max-parallel: 2 # 同時起動は安全のため最大2台までに制限
+      max-parallel: 5 # 💥 同時起動を5台に引き上げ
 
     steps:
     - name: Checkout code
@@ -42,6 +48,13 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y google-chrome-stable
+
+    # 🟢 【リスク対策】5台が一斉にサイトへ突撃するのを防ぐため、0〜45秒のランダムな時間差を作って出撃させる
+    - name: Random Delay to Bypass Bot Detection
+      run: |
+        DELAY=$((RANDOM % 46))
+        echo "サーバーの同時衝突を防ぐため、${DELAY}秒間 待機してから出撃します..."
+        sleep $DELAY
 
     - name: Run Scraper
       run: |

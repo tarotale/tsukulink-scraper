@@ -1,7 +1,7 @@
-name: Tsukulink Auto Scraper
+name: Tsukulink Split Scraper
 
 on:
-  workflow_dispatch: # GitHubの画面から手動でボタンを押して起動する設定
+  workflow_dispatch:
 
 jobs:
   scrape:
@@ -9,10 +9,20 @@ jobs:
     
     strategy:
       matrix:
-        # 同時に走らせたい都道府県を指定（ここで複数指定すると並列で動きます）
-        prefecture: ["大阪府", "兵庫県", "京都府"]
+        include:
+          # 大阪府の担当区域を分割してセット
+          - prefecture: "大阪府"
+            start_page: 1
+            end_page: 50
+          - prefecture: "大阪府"
+            start_page: 51
+            end_page: 100
+          - prefecture: "大阪府"
+            start_page: 101
+            end_page: 150
+            
       fail-fast: false
-      max-parallel: 2 # 🔴 ボット対策：同時に立ち上がるサーバー（IP）を最大2台に制限
+      max-parallel: 2 # 同時起動は安全のため最大2台までに制限
 
     steps:
     - name: Checkout code
@@ -35,11 +45,11 @@ jobs:
 
     - name: Run Scraper
       run: |
-        python tsukulink_bot.py "${{ matrix.prefecture }}"
+        python tsukulink_bot.py "${{ matrix.prefecture }}" "${{ matrix.start_page }}" "${{ matrix.end_page }}"
 
     - name: Upload CSV Artifact
       uses: actions/upload-artifact@v4
-      if: always() # 途中でエラーが起きても、そこまでに作られたCSVは必ず回収する
+      if: always()
       with:
-        name: tsukulink_result_${{ matrix.prefecture }}
+        name: tsukulink_result_${{ matrix.prefecture }}_page${{ matrix.start_page }}-${{ matrix.end_page }}
         path: tsukulink_*.csv

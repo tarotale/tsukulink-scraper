@@ -3,7 +3,7 @@ import os
 import re
 import sys
 import time
-import random  # 🔴 ランダム待機用
+import random
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -11,16 +11,17 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
-# 引数の受け取り
-DEFAULT_PREFECTURE = "大阪府"
-if len(sys.argv) > 1:
-    TARGET_PREFECTURE = sys.argv[1]
-else:
-    TARGET_PREFECTURE = DEFAULT_PREFECTURE
+# ========================================================
+# 【設定項目】コマンドライン引数から条件を受け取る
+# 引数の構成: [1]都道府県 [2]開始ページ [3]終了ページ
+# ========================================================
+TARGET_PREFECTURE = sys.argv[1] if len(sys.argv) > 1 else "大阪府"
+START_PAGE = int(sys.argv[2]) if len(sys.argv) > 2 else 1
+END_PAGE = int(sys.argv[3]) if len(sys.argv) > 3 else 5
 
 safe_name = re.sub(r'[\\/:*?"<>|]', '_', TARGET_PREFECTURE)
-OUTPUT_MOBILE = f"tsukulink_{safe_name}_携帯.csv"
-OUTPUT_OTHER  = f"tsukulink_{safe_name}_固定その他.csv"
+OUTPUT_MOBILE = f"tsukulink_{safe_name}_page{START_PAGE}_{END_PAGE}_携帯.csv"
+OUTPUT_OTHER  = f"tsukulink_{safe_name}_page{START_PAGE}_{END_PAGE}_固定その他.csv"
 
 CSV_FIELDS = ["name", "hp_url", "address", "phone"]
 
@@ -88,22 +89,16 @@ def write_to_csv(data, phone):
 
 def scrape_tsukulink():
     options = webdriver.ChromeOptions()
-    
-    # 🔴 【GitHub Actions/ボット対策】ヘッドレス環境で人間っぽく見せる設定
     options.add_argument('--headless')                 
     options.add_argument('--no-sandbox')               
     options.add_argument('--disable-dev-shm-usage')    
     options.add_argument('--window-size=1280,1000')    
-    
-    # 一般的なWindows ChromeのUser-Agentをセットしてヘッドレスを隠す
     options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
     options.add_argument('--disable-blink-features=AutomationControlled')
     options.exclude_switches = ["enable-automation"]
     options.use_automation_extension = False
 
     driver = webdriver.Chrome(options=options)
-    
-    # 🔴 【ボット対策】JavaScriptの navigator.webdriver による自動判定を無効化
     driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
         "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
     })
@@ -114,7 +109,9 @@ def scrape_tsukulink():
     try:
         driver.get("https://tsukulink.net/companies")
         print("==========================================")
-        print(f" ツクリンク 抽出ボット（引数指定: {TARGET_PREFECTURE}）")
+        print(f" ツクリンク 分割並列ボット")
+        print(f" 対象地域: {TARGET_PREFECTURE}")
+        print(f" 担当範囲: {START_PAGE} ページ ～ {END_PAGE} ページ")
         print("==========================================")
 
         region_dropdown = wait.until(
@@ -158,10 +155,31 @@ def scrape_tsukulink():
         driver.execute_script("arguments[0].click();", search_button)
         time.sleep(4)
 
-        page_count = 1
+        # 🟢 【検証成功ロジック】大阪の絞り込み状態を維持したまま、指定ページへダミークリックワープ
+        if START_PAGE > 1:
+            print(f"\n🚀 ツクリンクの内部処理を偽装し、{START_PAGE} ページ目へワープします...")
+            try:
+                target_link = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "a[data-page]")))
+                driver.execute_script(f"""
+                    arguments[0].setAttribute('data-page', '{START_PAGE}');
+                    arguments[0].setAttribute('href', '/companies?page={START_PAGE}');
+                """, target_link)
+                driver.execute_script("arguments[0].click();", target_link)
+                time.sleep(5)
+                print(f" -> {START_PAGE} ページ目へのワープに成功しました。")
+            except Exception as e:
+                print(f"【警告】ワープ処理に失敗しました。1ページ目から開始します。 エラー: {e}")
+                pass
+
+        page_count = START_PAGE
         
         while True:
             print(f"\n>>> 第{page_count}ページ 処理開始...")
+            
+            if page_count > END_PAGE:
+                print(f"指定された終了ページ（{END_PAGE}P）に達したため、処理を正常終了します。")
+                break
+
             try:
                 wait.until(EC.presence_of_element_located((By.CLASS_NAME, "p-companies-list-item")))
             except TimeoutException:
@@ -246,7 +264,6 @@ def scrape_tsukulink():
                         driver.switch_to.window(main_handle)
                     continue
 
-                # 🔴 【ボット対策】毎回「2.5秒〜5.0秒」の間でランダムに待機時間を揺らし、人間が読んでいるように偽装
                 time.sleep(random.uniform(2.5, 5.0))
 
             print(f"\n--- 第{page_count}ページの20件が完了。次ページへ移動します ---")
@@ -265,9 +282,9 @@ def scrape_tsukulink():
     finally:
         driver.quit()
         print("\n==========================================")
-        print(" 処理が正常に終了しました！")
-        print(f" 対象地域: {TARGET_PREFECTURE}")
-        print(f" 抽出件数: 【 {total_extracted_count} 件 】完了しました。")
+        print(" 処理終了フェーズ")
+        print(f" 担当範囲: {START_PAGE}P ～ {END_PAGE}P")
+        print(f" 今回の抽出件数: 【 {total_extracted_count} 件 】完了しました。")
         print("==========================================")
 
 if __name__ == "__main__":

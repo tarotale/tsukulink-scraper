@@ -38,7 +38,7 @@ jobs:
         python tsukulink_bot.py "${{ matrix.prefecture }}"
 
     - name: Upload CSV Artifact
-      uses: actions/artifacts@v4
+      uses: actions/upload-artifact@v4
       if: always() # 途中でエラーが起きても、そこまでに作られたCSVは必ず回収する
       with:
         name: tsukulink_result_${{ matrix.prefecture }}

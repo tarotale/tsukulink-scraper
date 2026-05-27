@@ -4,8 +4,7 @@ import re
 import sys
 import time
 import random
-import json
-import requests  # Slack送信に使用
+import requests  # Slackへのファイル送信に使用
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -28,41 +27,42 @@ OUTPUT_OTHER  = f"tsukulink_{safe_name}_page{START_PAGE}_{END_PAGE}_kotei.csv"
 CSV_FIELDS = ["name", "hp_url", "address", "phone"]
 
 
-def send_to_slack(data, is_mobile):
-    """🟢 GitHubのSecretsからURLを取得し、Slackへ業者情報を通知する"""
-    webhook_url = os.environ.get("SLACK_WEBHOOK_URL")
-    if not webhook_url:
-        # ローカル検証時などURLがない場合はログ出力のみにする
-        print("  [Slack] Webhook URLが設定されていないため通知をスキップします。")
+def upload_to_slack(file_path, comment):
+    """🟢 処理の最後に、完成したCSVファイルをSlackへ直接アップロードする関数"""
+    bot_token = os.environ.get("SLACK_BOT_TOKEN")
+    channel_id = os.environ.get("SLACK_CHANNEL_ID")
+    
+    if not bot_token or not channel_id:
+        print(f"  [Slack] 設定が足りないため、{file_path} のアップロードをスキップします。")
         return
 
-    # 携帯番号持ちを強調するための絵文字とラベル設定
-    status_emoji = "📱【携帯番号獲得】" if is_mobile else "☎️【固定・その他】"
-    
-    # Slackのメンションや整形を用いたメッセージの組み立て
-    message_text = f"""
-{status_emoji}
-*会社名*: {data['name']}
-*電話番号*: `{data['phone'].replace("'", "")}`
-*HPリンク*: {data['hp_url']}
-*所在地*: {data['address']}
--------------------------------------------
-    """.strip()
+    if not os.path.exists(file_path):
+        print(f"  [Slack] 送信対象のファイルが存在しません: {file_path}")
+        return
 
-    payload = {"text": message_text}
-    try:
-        response = requests.post(
-            webhook_url, 
-            data=json.dumps(payload),
-            headers={'Content-Type': 'application/json'},
-            timeout=10
-        )
-        if response.status_code == 200:
-            print("  └─ Slackへの通知に成功しました。")
-        else:
-            print(f"  └─ Slack通知エラー (Status: {response.status_code})")
-    except Exception as e:
-        print(f"  └─ Slack送信中に例外が発生しました: {e}")
+    print(f"  🚀 Slackへファイルをアップロード中: {file_path} ...")
+    
+    # SlackのファイルアップロードAPI (v2)
+    url = "https://slack.com/api/files.upload"
+    headers = {"Authorization": f"Bearer {bot_token}"}
+    
+    # 送信するデータとファイルの準備
+    payload = {
+        "channels": channel_id,
+        "initial_comment": comment
+    }
+    
+    with open(file_path, "rb") as f:
+        files = {"file": f}
+        try:
+            response = requests.post(url, headers=headers, data=payload, files=files, timeout=30)
+            result = response.json()
+            if result.get("ok"):
+                print(f"  └─ Slackへのファイルアップロードに成功しました！ ({file_path})")
+            else:
+                print(f"  └─ Slackアップロードエラー: {result.get('error')}")
+        except Exception as e:
+            print(f"  └─ Slack送信中に例外が発生しました: {e}")
 
 
 def is_mobile_number(number):
@@ -158,7 +158,7 @@ def scrape_tsukulink():
     try:
         driver.get("https://tsukulink.net/companies")
         print("==========================================")
-        print(f" ツクリンク 分割並列ボット (Slack通知版)")
+        print(f" ツクリンク 分割並列ボット (Slackファイル送信版)")
         print(f" 対象地域: {TARGET_PREFECTURE}")
         print(f" 担当範囲: {START_PAGE} ページ ～ {END_PAGE} ページ")
         print("==========================================")
@@ -209,7 +209,7 @@ def scrape_tsukulink():
         driver.execute_script("arguments[0].click();", search_button)
         time.sleep(4)
 
-        # 🟢 指定ページへダミークリックワープ
+        # 指定ページへワープ
         if START_PAGE > 1:
             print(f"\n🚀 ツクリンクの内部処理を偽装し、{START_PAGE} ページ目へワープします...")
             try:
@@ -246,10 +246,8 @@ def scrape_tsukulink():
                 try:
                     name_element = card.find_element(By.CSS_SELECTOR, "a.p-companies-list-item__name")
                     comp_name = name_element.text.strip()
-                    
                     detail_btn = card.find_element(By.XPATH, ".//a[contains(@class, 'p-companies-list-item__btn') and text()='詳しく見る']")
                     detail_url = detail_btn.get_attribute("href")
-                    
                     if detail_url:
                         targets.append({"name": comp_name, "url": detail_url})
                 except:
@@ -298,7 +296,6 @@ def scrape_tsukulink():
                     if found_hp_url and "tsukulink.net" not in found_hp_url:
                         phone = deep_scan_external_site(driver, found_hp_url)
                     
-                    # データの辞書化
                     csv_data = {
                         "name": target["name"],
                         "hp_url": found_hp_url if (found_hp_url and "tsukulink.net" not in found_hp_url) else "記載なし",
@@ -306,13 +303,8 @@ def scrape_tsukulink():
                         "phone": f"'{phone}" if phone else "記載なし"
                     }
                     
-                    # CSVへ書き出し
                     write_to_csv(csv_data, phone)
                     total_extracted_count += 1
-
-                    # 🟢 【追加機能】電話番号が判明している場合のみSlackへ自動リアルタイム送信
-                    if phone:
-                        send_to_slack(csv_data, is_mobile=is_mobile_number(phone))
 
                     driver.close()
                     driver.switch_to.window(main_handle)
@@ -342,9 +334,19 @@ def scrape_tsukulink():
 
     finally:
         print("\n==========================================")
-        print(" 処理終了フェーズ")
-        print(f" 今回の抽出件数: 【 {total_extracted_count} 件 】完了しました。")
+        print(" 処理終了フェーズ：Slackへファイルを送信します")
         print("==========================================")
+        
+        # 🟢 【新機能】全ページ終了後に、完成したCSVファイルをSlackへドカンとアップロード
+        upload_to_slack(
+            file_path=OUTPUT_MOBILE, 
+            comment=f"✅ 【採掘完了】{TARGET_PREFECTURE} ({START_PAGE}P～{END_PAGE}P) の [携帯番号リスト] です！ (総抽出: {total_extracted_count}件)"
+        )
+        upload_to_slack(
+            file_path=OUTPUT_OTHER, 
+            comment=f"✅ 【採掘完了】{TARGET_PREFECTURE} ({START_PAGE}P～{END_PAGE}P) の [固定電話・その他リスト] です！"
+        )
+        
         driver.quit()
 
 

@@ -22,8 +22,8 @@ END_PAGE = int(sys.argv[3]) if len(sys.argv) > 3 else 5
 # 安全なファイル名用のクレンジング
 safe_name = re.sub(r'[\\/:*?"<>|]', '_', TARGET_PREFECTURE)
 # 他の並列サーバーが作ったCSVと混ざって上書きされないよう、ファイル名に担当ページを明記
-OUTPUT_MOBILE = f"tsukulink_{safe_name}_page{START_PAGE}_{END_PAGE}_携帯.csv"
-OUTPUT_OTHER  = f"tsukulink_{safe_name}_page{START_PAGE}_{END_PAGE}_固定その他.csv"
+OUTPUT_MOBILE = f"tsukulink_{safe_name}_page{START_PAGE}_{END_PAGE}_keitai.csv"
+OUTPUT_OTHER  = f"tsukulink_{safe_name}_page{START_PAGE}_{END_PAGE}_kotei.csv"
 
 # CSVの出力ヘッダーを指定の順番に設定
 CSV_FIELDS = ["name", "hp_url", "address", "phone"]

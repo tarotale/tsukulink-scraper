@@ -33,7 +33,7 @@ CSV_FIELDS = ["name", "hp_url", "address", "phone"]
 
 
 def upload_to_slack(file_path, comment):
-    """完成したCSVファイルをSlackへアップロードする関数（0件時はテキストのみ送信）"""
+    """【Slack最新仕様版】ファイルをアップロード、または0件時はメッセージのみ送信"""
     bot_token = os.environ.get("SLACK_BOT_TOKEN")
     channel_id = os.environ.get("SLACK_CHANNEL_ID")
     
@@ -41,54 +41,62 @@ def upload_to_slack(file_path, comment):
         print(f"  [Slack] 設定が足りないため、{file_path} のアップロードをスキップします。")
         return
 
-    # 🟢 【新機能】今回の範囲でデータが0件で、CSVファイルが生成されなかった場合
+    # 🟢 1. データが0件でCSVファイルがない場合はメッセージのみ送信
     if not os.path.exists(file_path):
         print(f"  [Slack] CSVが生成されなかったため、メッセージ通知のみ送信します。")
-        
-        # chat.postMessage APIを使って、テキストだけをSlackに投稿
-        text_url = "https://slack.com/api/chat.postMessage"
-        headers = {
-            "Authorization": f"Bearer {bot_token}",
-            "Content-Type": "application/json; charset=utf-8"
-        }
-        # コメント内の「[携帯番号リスト] です！」などを「対象データなし（0件）」に書き換えて通知
+        url = "https://slack.com/api/chat.postMessage"
+        headers = {"Authorization": f"Bearer {bot_token}", "Content-Type": "application/json; charset=utf-8"}
         notice_comment = comment.replace("です！", "は対象データなし（0件）でした。")
-        payload = {
-            "channel": channel_id,
-            "text": notice_comment
-        }
+        payload = {"channel": channel_id, "text": notice_comment}
         try:
-            res = requests.post(text_url, headers=headers, json=payload, timeout=30)
-            if res.json().get("ok"):
+            res = requests.post(url, headers=headers, json=payload, timeout=30).json()
+            if res.get("ok"):
                 print("  └─ Slackへの通知メッセージの送信に成功しました。")
             else:
-                print(f"  └─ Slack通知エラー: {res.json().get('error')}")
+                print(f"  └─ Slack通知エラー: {res.get('error')}")
         except Exception as e:
             print(f"  └─ Slack通知中に例外が発生しました: {e}")
         return
 
-    # 📁 ファイルが存在する場合は、従来通りファイルアップロードを実行
+    # 🟢 2. ファイルが存在する場合は最新の3ステップ方式でアップロード
     print(f"\n🚀 Slackへファイルをアップロード中: {file_path} ...")
-    
-    url = "https://slack.com/api/files.upload"
+    file_name = os.path.basename(file_path)
+    file_size = os.path.getsize(file_path)
     headers = {"Authorization": f"Bearer {bot_token}"}
-    
-    payload = {
-        "channels": channel_id,
-        "initial_comment": comment
-    }
-    
-    with open(file_path, "rb") as f:
-        files = {"file": f}
-        try:
-            response = requests.post(url, headers=headers, data=payload, files=files, timeout=30)
-            result = response.json()
-            if result.get("ok"):
-                print(f"  └─ Slackへのファイルアップロードに成功しました！ ({file_path})")
-            else:
-                print(f"  └─ Slackアップロードエラー: {result.get('error')}")
-        except Exception as e:
-            print(f"  └─ Slack送信中に例外が発生しました: {e}")
+
+    try:
+        # Step A: アップロード用の専用URLをSlackから発行してもらう
+        url_alloc = "https://slack.com/api/files.getUploadURLExternal"
+        res_alloc = requests.get(url_alloc, headers=headers, params={"filename": file_name, "length": file_size}, timeout=30).json()
+        if not res_alloc.get("ok"):
+            print(f"  └─ URL発行エラー: {res_alloc.get('error')}")
+            return
+        
+        upload_url = res_alloc.get("upload_url")
+        file_id = res_alloc.get("file_id")
+
+        # Step B: 発行されたURLに対してファイルをバイナリ送信
+        with open(file_path, "rb") as f:
+            res_upload = requests.post(upload_url, files={"file": f}, timeout=60)
+            if res_upload.status_code != 200:
+                print(f"  └─ ファイルバイナリ送信エラー (Status: {res_upload.status_code})")
+                return
+
+        # Step C: アップロード完了をSlackに伝えてチャンネルに紐付ける
+        url_conf = "https://slack.com/api/files.completeUploadExternal"
+        payload_conf = {
+            "files": [{"id": file_id, "title": file_name}],
+            "channel_id": channel_id,
+            "initial_comment": comment
+        }
+        res_conf = requests.post(url_conf, headers=headers, json=payload_conf, timeout=30).json()
+        if res_conf.get("ok"):
+            print(f"  └─ Slackへのファイルアップロードに成功しました！ ({file_name})")
+        else:
+            print(f"  └─ 完了確定エラー: {res_conf.get('error')}")
+
+    except Exception as e:
+        print(f"  └─ Slack送信中に例外が発生しました: {e}")
 
 
 def is_mobile_number(number):

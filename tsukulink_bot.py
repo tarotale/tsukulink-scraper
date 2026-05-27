@@ -4,31 +4,36 @@ import re
 import sys
 import time
 import random
+import json
 import requests  # Slackへのファイル送信に使用
 
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
+# ========================================================
+# 【設定項目】
+# コマンドライン引数（バッチ側）から都道府県を受け取れるようにします
+# ========================================================
+DEFAULT_PREFECTURE = "大阪府"
 
-# ========================================================
-# 【設定項目】コマンドライン引数から条件を受け取る
-# ========================================================
-TARGET_PREFECTURE = sys.argv[1] if len(sys.argv) > 1 else "大阪府"
+# バッチファイルから都道府県の指定（引数）があればそれを使う
+if len(sys.argv) > 1:
+    TARGET_PREFECTURE = sys.argv[1]
+else:
+    TARGET_PREFECTURE = DEFAULT_PREFECTURE
+
+# 引数から開始ページと終了ページも受け取れるように拡張（GitHub Actions並列用）
 START_PAGE = int(sys.argv[2]) if len(sys.argv) > 2 else 1
 END_PAGE = int(sys.argv[3]) if len(sys.argv) > 3 else 5
 
-# 文字化け対策のため、成果物のファイル名はローマ字（keitai / kotei）に固定
+# 安全なファイル名用のクレンジング（文字化け防止のためローマ字固定）
 safe_name = re.sub(r'[\\/:*?"<>|]', '_', TARGET_PREFECTURE)
 OUTPUT_MOBILE = f"tsukulink_{safe_name}_page{START_PAGE}_{END_PAGE}_keitai.csv"
 OUTPUT_OTHER  = f"tsukulink_{safe_name}_page{START_PAGE}_{END_PAGE}_kotei.csv"
 
+# CSVの出力ヘッダーを指定の順番に設定
 CSV_FIELDS = ["name", "hp_url", "address", "phone"]
 
 
 def upload_to_slack(file_path, comment):
-    """🟢 処理の最後に、完成したCSVファイルをSlackへ直接アップロードする関数"""
+    """完成したCSVファイルをSlackへ直接アップロードする関数"""
     bot_token = os.environ.get("SLACK_BOT_TOKEN")
     channel_id = os.environ.get("SLACK_CHANNEL_ID")
     
@@ -36,17 +41,16 @@ def upload_to_slack(file_path, comment):
         print(f"  [Slack] 設定が足りないため、{file_path} のアップロードをスキップします。")
         return
 
+    # 🛠️ 【改善対策】今回の範囲でデータが0件で、CSVファイルが生成されなかった場合はスマートにスキップ
     if not os.path.exists(file_path):
-        print(f"  [Slack] 送信対象のファイルが存在しません: {file_path}")
+        print(f"  [Slack] 今回の範囲では対象データ（CSV）が生成されなかったため、送信をスキップします。")
         return
 
-    print(f"  🚀 Slackへファイルをアップロード中: {file_path} ...")
+    print(f"\n🚀 Slackへファイルをアップロード中: {file_path} ...")
     
-    # SlackのファイルアップロードAPI (v2)
     url = "https://slack.com/api/files.upload"
     headers = {"Authorization": f"Bearer {bot_token}"}
     
-    # 送信するデータとファイルの準備
     payload = {
         "channels": channel_id,
         "initial_comment": comment
@@ -137,6 +141,13 @@ def write_to_csv(data, phone):
 
 
 def scrape_tsukulink():
+    # 遅延インポートで環境エラーを回避
+    from selenium import webdriver
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    from selenium.common.exceptions import TimeoutException, NoSuchElementException
+
     options = webdriver.ChromeOptions()
     options.add_argument('--headless')                 
     options.add_argument('--no-sandbox')               
@@ -158,7 +169,7 @@ def scrape_tsukulink():
     try:
         driver.get("https://tsukulink.net/companies")
         print("==========================================")
-        print(f" ツクリンク 分割並列ボット (Slackファイル送信版)")
+        print(f" ツクリンク 企業情報自動取得クローラー (GitHub/Slack版)")
         print(f" 対象地域: {TARGET_PREFECTURE}")
         print(f" 担当範囲: {START_PAGE} ページ ～ {END_PAGE} ページ")
         print("==========================================")
@@ -209,7 +220,7 @@ def scrape_tsukulink():
         driver.execute_script("arguments[0].click();", search_button)
         time.sleep(4)
 
-        # 指定ページへワープ
+        # 指定ページへジャンプするワープロジック
         if START_PAGE > 1:
             print(f"\n🚀 ツクリンクの内部処理を偽装し、{START_PAGE} ページ目へワープします...")
             try:
@@ -260,7 +271,7 @@ def scrape_tsukulink():
             main_handle = driver.current_window_handle
             
             for index, target in enumerate(targets, start=1):
-                print(f"[{page_count}P-{index}] {target['name']}")
+                print(f"\n[{page_count}P-{index}] {target['name']}")
                 
                 try:
                     driver.execute_script("window.open(arguments[0], '_blank');", target["url"])
@@ -295,6 +306,12 @@ def scrape_tsukulink():
                     phone = None
                     if found_hp_url and "tsukulink.net" not in found_hp_url:
                         phone = deep_scan_external_site(driver, found_hp_url)
+                        if phone:
+                            print(f"  └─ 外部HPで発見: {phone}")
+                        else:
+                            print(f"  └─ 外部HPで発見: [なし]")
+                    else:
+                        print("  └─ 外部HPリンクなし")
                     
                     csv_data = {
                         "name": target["name"],
@@ -303,6 +320,7 @@ def scrape_tsukulink():
                         "phone": f"'{phone}" if phone else "記載なし"
                     }
                     
+                    # CSVへ書き出し
                     write_to_csv(csv_data, phone)
                     total_extracted_count += 1
 
@@ -334,10 +352,12 @@ def scrape_tsukulink():
 
     finally:
         print("\n==========================================")
-        print(" 処理終了フェーズ：Slackへファイルを送信します")
+        print(" 処理終了フェーズ")
+        print(f" 対象地域: {TARGET_PREFECTURE}")
+        print(f" 抽出件数: 【 {total_extracted_count} 件 】完了しました。")
         print("==========================================")
         
-        # 🟢 【新機能】全ページ終了後に、完成したCSVファイルをSlackへドカンとアップロード
+        # 全ページ終了後に、完成したCSVファイルをSlackへアップロード
         upload_to_slack(
             file_path=OUTPUT_MOBILE, 
             comment=f"✅ 【採掘完了】{TARGET_PREFECTURE} ({START_PAGE}P～{END_PAGE}P) の [携帯番号リスト] です！ (総抽出: {total_extracted_count}件)"

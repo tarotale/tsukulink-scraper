@@ -11,24 +11,24 @@ jobs:
       matrix:
         include:
           # 大阪府の担当区域を5分割（計250ページ分）に拡張
-          - prefecture: "奈良県"
+          - prefecture: "大阪府"
             start_page: 1
             end_page: 50
-          - prefecture: "奈良県"
+          - prefecture: "大阪府"
             start_page: 51
             end_page: 100
-          - prefecture: "奈良県"
+          - prefecture: "大阪府"
             start_page: 101
             end_page: 150
-          - prefecture: "奈良県"
+          - prefecture: "大阪府"
             start_page: 151
             end_page: 200
-          - prefecture: "奈良県"
+          - prefecture: "大阪府"
             start_page: 201
             end_page: 250
             
       fail-fast: false
-      max-parallel: 5 # 💥 同時起動を5台に引き上げ
+      max-parallel: 5 # 同時起動を5台に引き上げ
 
     steps:
     - name: Checkout code
@@ -42,7 +42,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install selenium
+        pip install selenium requests  # Slack送信に必要なrequestsもここで確実にインストール
 
     - name: Install Chrome
       run: |
@@ -56,13 +56,10 @@ jobs:
         echo "サーバーの同時衝突を防ぐため、${DELAY}秒間 待機してから出撃します..."
         sleep $DELAY
 
+    # 🟢 【安全連携】GitHubの金庫（Secrets）からSlackのトークンとチャンネルIDを安全に読み込み、Pythonに渡して実行
     - name: Run Scraper
+      env:
+        SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
       run: |
         python tsukulink_bot.py "${{ matrix.prefecture }}" "${{ matrix.start_page }}" "${{ matrix.end_page }}"
-
-    - name: Upload CSV Artifact
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: tsukulink_result_${{ matrix.prefecture }}_page${{ matrix.start_page }}-${{ matrix.end_page }}
-        path: tsukulink_*.csv

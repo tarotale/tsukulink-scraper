@@ -11,21 +11,21 @@ jobs:
       matrix:
         include:
           # 大阪府の担当区域を5分割（計250ページ分）に拡張
-          - prefecture: "大阪府"
+          - prefecture: "奈良県"
+            start_page: 251
+            end_page: 300
+          - prefecture: "奈良県"
+            start_page: 301
+            end_page: 350
+          - prefecture: "奈良県"
+            start_page: 351
+            end_page: 400
+          - prefecture: "和歌山県"
             start_page: 1
             end_page: 50
-          - prefecture: "大阪府"
+          - prefecture: "和歌山県"
             start_page: 51
             end_page: 100
-          - prefecture: "大阪府"
-            start_page: 101
-            end_page: 150
-          - prefecture: "大阪府"
-            start_page: 151
-            end_page: 200
-          - prefecture: "大阪府"
-            start_page: 201
-            end_page: 250
             
       fail-fast: false
       max-parallel: 5 # 同時起動を5台に引き上げ

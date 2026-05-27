@@ -33,7 +33,7 @@ CSV_FIELDS = ["name", "hp_url", "address", "phone"]
 
 
 def upload_to_slack(file_path, comment):
-    """完成したCSVファイルをSlackへ直接アップロードする関数"""
+    """完成したCSVファイルをSlackへアップロードする関数（0件時はテキストのみ送信）"""
     bot_token = os.environ.get("SLACK_BOT_TOKEN")
     channel_id = os.environ.get("SLACK_CHANNEL_ID")
     
@@ -41,11 +41,33 @@ def upload_to_slack(file_path, comment):
         print(f"  [Slack] 設定が足りないため、{file_path} のアップロードをスキップします。")
         return
 
-    # 🛠️ 【改善対策】今回の範囲でデータが0件で、CSVファイルが生成されなかった場合はスマートにスキップ
+    # 🟢 【新機能】今回の範囲でデータが0件で、CSVファイルが生成されなかった場合
     if not os.path.exists(file_path):
-        print(f"  [Slack] 今回の範囲では対象データ（CSV）が生成されなかったため、送信をスキップします。")
+        print(f"  [Slack] CSVが生成されなかったため、メッセージ通知のみ送信します。")
+        
+        # chat.postMessage APIを使って、テキストだけをSlackに投稿
+        text_url = "https://slack.com/api/chat.postMessage"
+        headers = {
+            "Authorization": f"Bearer {bot_token}",
+            "Content-Type": "application/json; charset=utf-8"
+        }
+        # コメント内の「[携帯番号リスト] です！」などを「対象データなし（0件）」に書き換えて通知
+        notice_comment = comment.replace("です！", "は対象データなし（0件）でした。")
+        payload = {
+            "channel": channel_id,
+            "text": notice_comment
+        }
+        try:
+            res = requests.post(text_url, headers=headers, json=payload, timeout=30)
+            if res.json().get("ok"):
+                print("  └─ Slackへの通知メッセージの送信に成功しました。")
+            else:
+                print(f"  └─ Slack通知エラー: {res.json().get('error')}")
+        except Exception as e:
+            print(f"  └─ Slack通知中に例外が発生しました: {e}")
         return
 
+    # 📁 ファイルが存在する場合は、従来通りファイルアップロードを実行
     print(f"\n🚀 Slackへファイルをアップロード中: {file_path} ...")
     
     url = "https://slack.com/api/files.upload"
@@ -165,6 +187,9 @@ def scrape_tsukulink():
 
     wait = WebDriverWait(driver, 15)
     total_extracted_count = 0
+    
+    keitai_count = 0
+    kotei_count = 0
 
     try:
         driver.get("https://tsukulink.net/companies")
@@ -313,6 +338,12 @@ def scrape_tsukulink():
                     else:
                         print("  └─ 外部HPリンクなし")
                     
+                    if phone:
+                        if is_mobile_number(phone):
+                            keitai_count += 1
+                        else:
+                            kotei_count += 1
+                    
                     csv_data = {
                         "name": target["name"],
                         "hp_url": found_hp_url if (found_hp_url and "tsukulink.net" not in found_hp_url) else "記載なし",
@@ -357,15 +388,12 @@ def scrape_tsukulink():
         print(f" 抽出件数: 【 {total_extracted_count} 件 】完了しました。")
         print("==========================================")
         
-        # 全ページ終了後に、完成したCSVファイルをSlackへアップロード
-        upload_to_slack(
-            file_path=OUTPUT_MOBILE, 
-            comment=f"✅ 【採掘完了】{TARGET_PREFECTURE} ({START_PAGE}P～{END_PAGE}P) の [携帯番号リスト] です！ (総抽出: {total_extracted_count}件)"
-        )
-        upload_to_slack(
-            file_path=OUTPUT_OTHER, 
-            comment=f"✅ 【採掘完了】{TARGET_PREFECTURE} ({START_PAGE}P～{END_PAGE}P) の [固定電話・その他リスト] です！"
-        )
+        mobile_comment = f"✅ 【採掘完了】{TARGET_PREFECTURE} ({START_PAGE}P～{END_PAGE}P) の [携帯番号リスト] です！ (取得件数: {keitai_count}件)"
+        other_comment  = f"✅ 【採掘完了】{TARGET_PREFECTURE} ({START_PAGE}P～{END_PAGE}P) の [固定電話・その他リスト] です！ (取得件数: {kotei_count}件)"
+
+        # 全ページ終了後に、完成したCSVファイルをSlackへアップロード（0件時はテキスト通知）
+        upload_to_slack(file_path=OUTPUT_MOBILE, comment=mobile_comment)
+        upload_to_slack(file_path=OUTPUT_OTHER, comment=other_comment)
         
         driver.quit()
 

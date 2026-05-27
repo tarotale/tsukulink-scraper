@@ -4,6 +4,8 @@ import re
 import sys
 import time
 import random
+import json
+import requests  # Slack送信に使用
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -13,20 +15,54 @@ from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
 # ========================================================
 # 【設定項目】コマンドライン引数から条件を受け取る
-# 引数の構成: [1]都道府県 [2]開始ページ [3]終了ページ
 # ========================================================
 TARGET_PREFECTURE = sys.argv[1] if len(sys.argv) > 1 else "大阪府"
 START_PAGE = int(sys.argv[2]) if len(sys.argv) > 2 else 1
 END_PAGE = int(sys.argv[3]) if len(sys.argv) > 3 else 5
 
-# 安全なファイル名用のクレンジング
+# 文字化け対策のため、成果物のファイル名はローマ字（keitai / kotei）に固定
 safe_name = re.sub(r'[\\/:*?"<>|]', '_', TARGET_PREFECTURE)
-# 他の並列サーバーが作ったCSVと混ざって上書きされないよう、ファイル名に担当ページを明記
 OUTPUT_MOBILE = f"tsukulink_{safe_name}_page{START_PAGE}_{END_PAGE}_keitai.csv"
 OUTPUT_OTHER  = f"tsukulink_{safe_name}_page{START_PAGE}_{END_PAGE}_kotei.csv"
 
-# CSVの出力ヘッダーを指定の順番に設定
 CSV_FIELDS = ["name", "hp_url", "address", "phone"]
+
+
+def send_to_slack(data, is_mobile):
+    """🟢 GitHubのSecretsからURLを取得し、Slackへ業者情報を通知する"""
+    webhook_url = os.environ.get("SLACK_WEBHOOK_URL")
+    if not webhook_url:
+        # ローカル検証時などURLがない場合はログ出力のみにする
+        print("  [Slack] Webhook URLが設定されていないため通知をスキップします。")
+        return
+
+    # 携帯番号持ちを強調するための絵文字とラベル設定
+    status_emoji = "📱【携帯番号獲得】" if is_mobile else "☎️【固定・その他】"
+    
+    # Slackのメンションや整形を用いたメッセージの組み立て
+    message_text = f"""
+{status_emoji}
+*会社名*: {data['name']}
+*電話番号*: `{data['phone'].replace("'", "")}`
+*HPリンク*: {data['hp_url']}
+*所在地*: {data['address']}
+-------------------------------------------
+    """.strip()
+
+    payload = {"text": message_text}
+    try:
+        response = requests.post(
+            webhook_url, 
+            data=json.dumps(payload),
+            headers={'Content-Type': 'application/json'},
+            timeout=10
+        )
+        if response.status_code == 200:
+            print("  └─ Slackへの通知に成功しました。")
+        else:
+            print(f"  └─ Slack通知エラー (Status: {response.status_code})")
+    except Exception as e:
+        print(f"  └─ Slack送信中に例外が発生しました: {e}")
 
 
 def is_mobile_number(number):
@@ -102,7 +138,7 @@ def write_to_csv(data, phone):
 
 def scrape_tsukulink():
     options = webdriver.ChromeOptions()
-    options.add_argument('--headless')                 # クラウド実行のため必須（画面を表示しない）
+    options.add_argument('--headless')                 
     options.add_argument('--no-sandbox')               
     options.add_argument('--disable-dev-shm-usage')    
     options.add_argument('--window-size=1280,1000')    
@@ -122,7 +158,7 @@ def scrape_tsukulink():
     try:
         driver.get("https://tsukulink.net/companies")
         print("==========================================")
-        print(f" ツクリンク 分割並列ボット (GitHub版)")
+        print(f" ツクリンク 分割並列ボット (Slack通知版)")
         print(f" 対象地域: {TARGET_PREFECTURE}")
         print(f" 担当範囲: {START_PAGE} ページ ～ {END_PAGE} ページ")
         print("==========================================")
@@ -173,7 +209,7 @@ def scrape_tsukulink():
         driver.execute_script("arguments[0].click();", search_button)
         time.sleep(4)
 
-        # 🟢 【検証成功ロジック】対象地域を維持したまま指定ページへダミークリックワープ
+        # 🟢 指定ページへダミークリックワープ
         if START_PAGE > 1:
             print(f"\n🚀 ツクリンクの内部処理を偽装し、{START_PAGE} ページ目へワープします...")
             try:
@@ -191,11 +227,8 @@ def scrape_tsukulink():
 
         page_count = START_PAGE
         
-        # ページループ
         while True:
             print(f"\n>>> 第{page_count}ページ 処理開始...")
-            
-            # 🟢 指定された「終了ページ」を超えたらその時点で安全に正常終了させる
             if page_count > END_PAGE:
                 print(f"指定された終了ページ（{END_PAGE}P）に達したため、処理を正常終了します。")
                 break
@@ -228,7 +261,6 @@ def scrape_tsukulink():
 
             main_handle = driver.current_window_handle
             
-            # 7. 回収したURLリストを元に、別タブを生成して巡回
             for index, target in enumerate(targets, start=1):
                 print(f"[{page_count}P-{index}] {target['name']}")
                 
@@ -259,29 +291,14 @@ def scrape_tsukulink():
                                     break
                             except NoSuchElementException:
                                 pass
-                            
-                            try:
-                                div_el = heading.find_element(By.XPATH, "./following-sibling::div[contains(@class, 'p-companies-show-detail__content')]")
-                                div_text = div_el.text.strip()
-                                url_match = re.search(r'https?://[^\s]+', div_text)
-                                if url_match:
-                                    found_hp_url = url_match.group(0)
-                                    break
-                            except NoSuchElementException:
-                                pass
                     except Exception:
                         pass
 
                     phone = None
                     if found_hp_url and "tsukulink.net" not in found_hp_url:
                         phone = deep_scan_external_site(driver, found_hp_url)
-                        if phone:
-                            print(f"  └─ 外部HPで発見: {phone}")
-                        else:
-                            print(f"  └─ 外部HPで発見: [なし]")
-                    else:
-                        print(f"  └─ 外部HPリンクなし")
-
+                    
+                    # データの辞書化
                     csv_data = {
                         "name": target["name"],
                         "hp_url": found_hp_url if (found_hp_url and "tsukulink.net" not in found_hp_url) else "記載なし",
@@ -289,8 +306,13 @@ def scrape_tsukulink():
                         "phone": f"'{phone}" if phone else "記載なし"
                     }
                     
+                    # CSVへ書き出し
                     write_to_csv(csv_data, phone)
                     total_extracted_count += 1
+
+                    # 🟢 【追加機能】電話番号が判明している場合のみSlackへ自動リアルタイム送信
+                    if phone:
+                        send_to_slack(csv_data, is_mobile=is_mobile_number(phone))
 
                     driver.close()
                     driver.switch_to.window(main_handle)
@@ -301,7 +323,6 @@ def scrape_tsukulink():
                         driver.switch_to.window(main_handle)
                     continue
 
-                # 接続遮断エラー（429 Too Many Requests）防止のためのランダム待機
                 time.sleep(random.uniform(2.5, 5.0))
 
             print(f"\n--- 第{page_count}ページの20件が完了。次ページへ移動します ---")
@@ -309,11 +330,9 @@ def scrape_tsukulink():
             try:
                 next_button = driver.find_element(By.CSS_SELECTOR, "a.c-pagination__link--next")
                 old_next_button = next_button
-                
                 driver.execute_script("arguments[0].scrollIntoView(true);", next_button)
                 time.sleep(1)
                 driver.execute_script("arguments[0].click();", next_button)
-
                 wait.until(EC.staleness_of(old_next_button))
                 time.sleep(3) 
                 page_count += 1
@@ -322,10 +341,8 @@ def scrape_tsukulink():
                 break
 
     finally:
-        # クラウド用：正常終了をシステムに伝え、確実にCSVアップロードステップへ繋ぐ
         print("\n==========================================")
         print(" 処理終了フェーズ")
-        print(f" 担当範囲: {START_PAGE}P ～ {END_PAGE}P")
         print(f" 今回の抽出件数: 【 {total_extracted_count} 件 】完了しました。")
         print("==========================================")
         driver.quit()

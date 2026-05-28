@@ -12,20 +12,20 @@ jobs:
         include:
           # 大阪府の担当区域を5分割（計250ページ分）に拡張
           - prefecture: "京都府"
-            start_page: 301
-            end_page: 350
+            start_page: 551
+            end_page: 600
           - prefecture: "京都府"
-            start_page: 351
-            end_page: 400
+            start_page: 601
+            end_page: 650
           - prefecture: "京都府"
-            start_page: 401
-            end_page: 450
+            start_page: 651
+            end_page: 700
           - prefecture: "京都府"
-            start_page: 451
-            end_page: 500
+            start_page: 701
+            end_page: 750
           - prefecture: "京都府"
-            start_page: 501
-            end_page: 550
+            start_page: 751
+            end_page: 812
             
       fail-fast: false
       max-parallel: 5 # 同時起動を5台に引き上げ
